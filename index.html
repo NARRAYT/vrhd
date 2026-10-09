@@ -43,8 +43,9 @@ body.d main{outline:1px dashed #fff;outline-offset:-8px}
 .tile img{width:100%;height:100%;object-fit:cover;display:block}
 .tile.ico:hover{background:#fff;color:#000}
 .tile .big{width:46px;height:46px;stroke-width:1.5}
-.pend .tile{border-style:dashed}
-.pend .tag{position:absolute;left:0;bottom:0;right:0;background:#fff;color:#000;padding:3px 6px;font-size:12px;font-weight:700}
+.pend .tile,.mark .tile{border-style:dashed}
+.mark img,.mark .big{opacity:.3}
+.pend .tag,.mark .tag{position:absolute;left:0;bottom:0;right:0;background:#fff;color:#000;padding:3px 6px;font-size:12px;font-weight:700}
 .upcell .tile{border-style:dashed}
 .upl{display:block;margin-top:7px;padding:2px 0;border-bottom:1px solid transparent}
 
@@ -148,6 +149,7 @@ $('#out').innerHTML  = I.out;
 $('#refb').innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/></svg>';
 $('#refb').onclick = async () => { await load(); toast('Список обновлён'); };
 
+let dels = new Set();
 let tree = [], pend = [], cur = '', busy = false, pl = [], pi = -1;
 
 let tt;
@@ -195,7 +197,17 @@ async function gh(p, o={}){
   }
   return r.json();
 }
+/* ветка могла сдвинуться (прошлый коммит ещё не виден или собралась Pages) — повторяем с новым HEAD */
 async function commit(entries, msg){
+  for (let a = 1; ; a++){
+    try{ return await commitOnce(entries, msg); }
+    catch(e){
+      if (a >= 6 || !/fast forward|422|409/i.test(e.message)) throw e;
+      await new Promise(r => setTimeout(r, 500 * a));
+    }
+  }
+}
+async function commitOnce(entries, msg){
   const ref = await gh(`/git/ref/heads/${C.branch}`);
   const cs  = ref.object.sha;
   const c   = await gh(`/git/commits/${cs}`);
@@ -307,9 +319,14 @@ function render(){
     const b = document.createElement('button'); b.className='cp'; b.innerHTML=I.cp; b.title='Копировать ссылку'; b.setAttribute('aria-label','Копировать ссылку');
     b.onclick = e => { e.stopPropagation(); copy(SITE + enc(prefix + f), b); };
     t.append(b);
-    const d = document.createElement('button'); d.className='del'; d.innerHTML=I.trash; d.title='Удалить файл'; d.setAttribute('aria-label','Удалить файл');
+    const marked = dels.has(prefix + f);
+    const d = document.createElement('button'); d.className='del';
+    d.innerHTML = marked ? I.x : I.trash;
+    d.title = marked ? 'Снять отметку' : 'Отметить на удаление';
+    d.setAttribute('aria-label', d.title);
     d.onclick = e => { e.stopPropagation(); remove(prefix + f); };
     t.append(d);
+    if (marked){ c.classList.add('mark'); t.insertAdjacentHTML('beforeend', '<span class="tag">будет удалён</span>'); }
     bindName(n, async v => {
       let nv = clean(v); if (!nv) return false;
       const e = '.' + ext(f); if (!nv.toLowerCase().endsWith(e)) nv += e;
@@ -338,8 +355,9 @@ function render(){
   });
 
   const go = $('#go');
-  go.hidden = !pend.length;
-  if (!busy) go.innerHTML = I.up + '<span>Загрузить ' + pend.length + '</span>';
+  const cnt = pend.length + dels.size;
+  go.hidden = !cnt;
+  if (!busy) go.innerHTML = I.ok + '<span>Сохранить ' + cnt + '</span>';
 }
 
 /* ───────── действия ───────── */
@@ -350,13 +368,10 @@ async function copy(text, btn){
   setTimeout(() => { btn.innerHTML = I.cp; }, 1000);
 }
 
-async function remove(P){
-  if (!confirm('Удалить файл ' + P.split('/').pop() + '?')) return;
-  try{
-    await commit([{path:P, mode:'100644', type:'blob', sha:null}], 'delete');
-    await load();
-    toast('Удалено');
-  }catch(err){ toast(err.message); }
+/* удаление — только отметка; реально файл удалится по кнопке «Сохранить» */
+function remove(P){
+  if (dels.has(P)) dels.delete(P); else dels.add(P);
+  render();
 }
 
 async function rename(P, Q){
@@ -369,6 +384,7 @@ async function rename(P, Q){
       e.push({path:x.path, mode:x.mode, type:'blob', sha:null});
     }
     await commit(e, 'rename');
+    dels = new Set();
     await load();
     return true;
   }catch(err){ toast(err.message); return false; }
@@ -417,7 +433,7 @@ function add(list){
 }
 
 async function send(){
-  if (busy || !pend.length) return;
+  if (busy || !(pend.length || dels.size)) return;
   if (pend.some(q => !q.dir)){ toast('Файлы в корень загружать нельзя'); return; }
   busy = true;
   const go = $('#go'); go.disabled = true;
@@ -429,10 +445,12 @@ async function send(){
       ents.push({path:q.dir + '/' + q.name, mode:'100644', type:'blob', sha:b.sha});
     }
     go.textContent = '…';
-    await commit(ents, 'upload');
-    pend.forEach(q => URL.revokeObjectURL(q.url)); pend = [];
+    const up = new Set(ents.map(x => x.path));
+    for (const p of dels) if (!up.has(p)) ents.push({path:p, mode:'100644', type:'blob', sha:null});
+    await commit(ents, 'update');
+    pend.forEach(q => URL.revokeObjectURL(q.url)); pend = []; dels = new Set();
     busy = false; go.disabled = false;
-    toast('Загружено');
+    toast('Сохранено');
     await load();
   }catch(e){ toast(e.message); }
   busy = false; go.disabled = false; render();
