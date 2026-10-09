@@ -329,19 +329,6 @@ function render(){
     m.append(c);
   });
 
-  /* пустое состояние */
-  if (!dirs.size && !files.length && !pend.some(q => q.dir === cur)){
-    const e = document.createElement('div'); e.className = 'empty';
-    if (root){
-      e.innerHTML = I.fplus + '<span>Создать первую папку</span>';
-      e.onclick = newFolder;
-    } else {
-      e.innerHTML = I.plus + '<span>Загрузить файлы</span>';
-      e.onclick = () => $('#fi').click();
-    }
-    m.append(e);
-  }
-
   const go = $('#go');
   go.hidden = !pend.length;
   if (!busy) go.innerHTML = I.up + '<span>Загрузить ' + pend.length + '</span>';
@@ -374,7 +361,6 @@ function newFolder(){
   if ($('#nf')) { $('#nf').focus(); return; }
   const {c,t,n} = cell(I.dir, '', true);
   n.id = 'nf'; n.readOnly = false; n.placeholder = 'folder-name'; t.style.borderStyle = 'dashed';
-  $('#main').querySelector('.empty')?.remove();
   /* новая папка встаёт после плитки «назад», если она есть */
   const up = $('#main').querySelector('.upcell');
   if (up) up.after(c); else $('#main').prepend(c);
