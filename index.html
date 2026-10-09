@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>vrhd</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html,body{background:#000;color:#fff;font:14px/1.3 ui-monospace,Menlo,Consolas,monospace;min-height:100%}
+svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:square;stroke-linejoin:miter;flex:none}
+button{font:inherit}
+
+header{position:sticky;top:0;z-index:5;background:#000;border-bottom:1px solid #fff;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px}
+#path{display:flex;gap:8px;flex-wrap:wrap;min-width:0}
+#path a{cursor:pointer;padding:0 2px}
+#path a:hover{background:#fff;color:#000}
+.r{display:flex;gap:8px}
+.ic{width:34px;height:34px;display:grid;place-items:center;background:#000;color:#fff;border:1px solid #fff;cursor:pointer}
+.ic:hover,.ic:focus-visible{background:#fff;color:#000;outline:0}
+
+main{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:18px 16px;padding:16px 16px 96px}
+body.d main{outline:1px dashed #fff;outline-offset:-8px}
+.cell{min-width:0}
+.tile{position:relative;aspect-ratio:1;border:1px solid #fff;cursor:pointer;overflow:hidden;display:grid;place-items:center}
+.tile img{width:100%;height:100%;object-fit:cover;filter:grayscale(1);display:block}
+.tile:hover img{filter:none}
+.tile .big{width:44px;height:44px;stroke-width:1.5}
+.tile:hover{background:#fff;color:#000}
+.tile:hover .big{stroke:#000}
+.pend .tile{border-style:dashed}
+
+.name{display:block;width:100%;margin-top:6px;padding:2px 0;background:none;border:0;border-bottom:1px solid #000;
+  color:#fff;font:inherit;outline:0;text-overflow:ellipsis;cursor:text}
+.name:focus{border-bottom-color:#fff}
+.name::selection{background:#fff;color:#000}
+
+.cp,.rm{position:absolute;top:0;right:0;width:30px;height:30px;display:grid;place-items:center;
+  background:#fff;color:#000;border:0;cursor:pointer}
+.cp:hover,.rm:hover,.cp:focus-visible,.rm:focus-visible{background:#000;color:#fff;outline:1px solid #fff;outline-offset:-1px}
+@media(hover:hover){.cp{opacity:0}.tile:hover .cp,.cp:focus-visible{opacity:1}}
+
+#go{position:fixed;right:16px;bottom:16px;height:48px;min-width:48px;padding:0 16px;display:flex;align-items:center;gap:8px;
+  background:#fff;color:#000;border:1px solid #fff;font-weight:700;cursor:pointer;z-index:6}
+#go:hover:not(:disabled),#go:focus-visible{background:#000;color:#fff;outline:0}
+#go:disabled{cursor:progress}
+
+#pv{position:fixed;inset:0;z-index:20;background:#000;display:grid;place-items:center;cursor:zoom-out}
+#pi{max-width:96vw;max-height:96vh;object-fit:contain}
+#pa{text-align:center;padding:20px;cursor:default}
+#au{width:min(480px,88vw);filter:grayscale(1)}
+#pn{margin-top:14px;word-break:break-all}
+
+#t{position:fixed;left:16px;bottom:16px;z-index:30;max-width:calc(100vw - 100px);background:#fff;color:#000;padding:8px 12px;font-weight:700}
+@media(prefers-reduced-motion:no-preference){.tile img{transition:filter .15s}}
+</style>
+</head>
+<body>
+<header>
+  <nav id="path"></nav>
+  <div class="r">
+    <button class="ic" id="addb" aria-label="+"></button>
+    <button class="ic" id="fob" aria-label="folder"></button>
+  </div>
+</header>
+<main id="main"></main>
+<button id="go" hidden></button>
+<div id="pv" hidden><img id="pi" alt=""><div id="pa" hidden><audio id="au" controls></audio><p id="pn"></p></div></div>
+<div id="t" hidden></div>
+<input type="file" id="fi" multiple accept=".png,.jpg,.jpeg,.gif,.mp3,image/png,image/jpeg,image/gif,audio/mpeg" hidden>
+
+<script>
+/* ───────── настройки ───────── */
+const C = {
+  owner:  'narrayt',
+  repo:   'vrhd',
+  branch: 'main',
+  token:  ''          // можно оставить пустым: спросит один раз и запомнит в браузере
+};
+
+/* ───────── утилиты ───────── */
+const $ = s => document.querySelector(s);
+const EX = ['png','jpg','jpeg','gif','mp3'];
+const MIME = {'image/png':'png','image/jpeg':'jpg','image/gif':'gif','audio/mpeg':'mp3'};
+const API  = `https://api.github.com/repos/${C.owner}/${C.repo}`;
+const RAW  = `https://raw.githubusercontent.com/${C.owner}/${C.repo}/${C.branch}/`;
+const SITE = `https://${C.owner}.github.io/${C.repo}/`;
+const enc  = p => p.split('/').map(encodeURIComponent).join('/');
+const ext  = n => (n.includes('.') ? n.split('.').pop() : '').toLowerCase();
+const isOk = n => EX.includes(ext(n));
+const clean = s => s.trim().replace(/[\s\\/]+/g,'-').replace(/[^\p{L}\p{N}._-]/gu,'').replace(/^[.-]+/,'');
+
+const I = {
+  plus:  '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  fplus: '<svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/><path d="M12 11v6M9 14h6"/></svg>',
+  dir:   '<svg class="big" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></svg>',
+  play:  '<svg class="big" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+  cp:    '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11"/><path d="M5 15V4h11"/></svg>',
+  ok:    '<svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>',
+  x:     '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  up:    '<svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>'
+};
+$('#addb').innerHTML = I.plus;
+$('#fob').innerHTML  = I.fplus;
+
+let tree = [], pend = [], cur = '', busy = false, pl = [], pi = -1;
+
+let tt;
+function toast(m){ const e=$('#t'); e.textContent=m; e.hidden=false; clearTimeout(tt); tt=setTimeout(()=>e.hidden=true,3500); }
+
+/* ───────── github api ───────── */
+const tok = () => C.token || localStorage.getItem('t') || '';
+function need(){
+  if (tok()) return true;
+  const t = prompt('token');
+  if (t && t.trim()){ localStorage.setItem('t', t.trim()); return true; }
+  return false;
+}
+async function gh(p, o={}){
+  const h = {Accept:'application/vnd.github+json'};
+  if (tok()) h.Authorization = 'Bearer ' + tok();
+  if (o.body) h['Content-Type'] = 'application/json';
+  const r = await fetch(API + p, {...o, headers:h});
+  if (!r.ok){
+    if (r.status===401 && !o.method && !C.token && localStorage.getItem('t')){ localStorage.removeItem('t'); return gh(p,o); }
+    if (o.method && [401,403,404].includes(r.status) && !C.token) localStorage.removeItem('t');
+    let m=''; try{ m=(await r.json()).message; }catch{}
+    throw new Error(r.status + ' ' + m);
+  }
+  return r.json();
+}
+async function commit(entries, msg){
+  const ref = await gh(`/git/ref/heads/${C.branch}`);
+  const cs  = ref.object.sha;
+  const c   = await gh(`/git/commits/${cs}`);
+  const t   = await gh('/git/trees', {method:'POST', body:JSON.stringify({base_tree:c.tree.sha, tree:entries})});
+  const nc  = await gh('/git/commits', {method:'POST', body:JSON.stringify({message:msg, tree:t.sha, parents:[cs]})});
+  await gh(`/git/refs/heads/${C.branch}`, {method:'PATCH', body:JSON.stringify({sha:nc.sha})});
+}
+const blob = (content, encoding) => gh('/git/blobs', {method:'POST', body:JSON.stringify({content, encoding})});
+const b64 = f => new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(f); });
+
+async function load(){
+  try{ tree = (await gh(`/git/trees/${C.branch}?recursive=1`)).tree; }
+  catch(e){ toast(e.message); }
+  render();
+}
+
+/* ───────── рендер ───────── */
+function cell(tileHTML, name){
+  const c = document.createElement('div'); c.className = 'cell';
+  const t = document.createElement('div'); t.className = 'tile'; t.innerHTML = tileHTML;
+  const n = document.createElement('input'); n.className = 'name'; n.value = name; n.readOnly = true; n.spellcheck = false; n.autocomplete = 'off';
+  c.append(t, n);
+  return {c, t, n};
+}
+function bindName(n, fn){
+  let o = n.value;
+  n.onclick = () => {
+    if (!n.readOnly) return;
+    n.readOnly = false; n.focus();
+    const i = n.value.lastIndexOf('.');
+    n.setSelectionRange(0, i>0 ? i : n.value.length);
+  };
+  n.onkeydown = e => { if (e.key==='Enter') n.blur(); if (e.key==='Escape'){ n.value=o; n.blur(); } };
+  n.onblur = () => {
+    n.readOnly = true;
+    if (n.value === o) return;
+    fn(n.value).then(ok => { if (ok) o = n.value; else n.value = o; });
+  };
+}
+const taken = (d, n) => { const P=(d?d+'/':'')+n; return tree.some(x=>x.path===P || x.path.startsWith(P+'/')) || pend.some(q=>q.dir===d && q.name===n); };
+
+function render(){
+  const prefix = cur ? cur + '/' : '';
+
+  const p = $('#path'); p.innerHTML = '';
+  const mk = (t,h) => { const a=document.createElement('a'); a.textContent=t; a.onclick=()=>{ location.hash = h; }; return a; };
+  p.append(mk('/', ''));
+  const seg = cur ? cur.split('/') : [];
+  seg.forEach((s,i) => {
+    p.append(mk(s, '#' + enc(seg.slice(0,i+1).join('/'))));
+    if (i < seg.length-1) p.append(document.createTextNode('/'));
+  });
+
+  const dirs = new Set(), files = [];
+  for (const x of tree){
+    if (x.type!=='blob' || !x.path.startsWith(prefix)) continue;
+    const r = x.path.slice(prefix.length), i = r.indexOf('/');
+    if (i > 0){ const d = r.slice(0,i); if (d[0] !== '.') dirs.add(d); }
+    else if (isOk(r)) files.push(r);
+  }
+
+  const m = $('#main'); m.innerHTML = ''; pl = [];
+
+  [...dirs].sort().forEach(d => {
+    const {c,t,n} = cell(I.dir, d);
+    t.onclick = () => { location.hash = '#' + enc(prefix + d); };
+    bindName(n, async v => {
+      const nv = clean(v); if (!nv || nv === d) return false;
+      return rename(prefix + d, prefix + nv);
+    });
+    m.append(c);
+  });
+
+  files.sort().forEach(f => {
+    const url = RAW + enc(prefix + f), audio = ext(f)==='mp3', idx = pl.length;
+    pl.push({url, name:f, audio});
+    const {c,t,n} = cell(audio ? I.play : `<img src="${url}" alt="" loading="lazy">`, f);
+    t.onclick = () => show(idx);
+    const b = document.createElement('button'); b.className='cp'; b.innerHTML=I.cp; b.setAttribute('aria-label','copy');
+    b.onclick = e => { e.stopPropagation(); copy(SITE + enc(prefix + f), b); };
+    t.append(b);
+    bindName(n, async v => {
+      let nv = clean(v); if (!nv) return false;
+      const e = '.' + ext(f); if (!nv.toLowerCase().endsWith(e)) nv += e;
+      if (nv === f) return false;
+      return rename(prefix + f, prefix + nv);
+    });
+    m.append(c);
+  });
+
+  pend.filter(q => q.dir === cur).forEach(q => {
+    const audio = ext(q.name)==='mp3', idx = pl.length;
+    pl.push({url:q.url, name:q.name, audio});
+    const {c,t,n} = cell(audio ? I.play : `<img src="${q.url}" alt="">`, q.name);
+    c.classList.add('pend');
+    t.onclick = () => show(idx);
+    const b = document.createElement('button'); b.className='rm'; b.innerHTML=I.x; b.setAttribute('aria-label','remove');
+    b.onclick = e => { e.stopPropagation(); URL.revokeObjectURL(q.url); pend = pend.filter(z=>z!==q); render(); };
+    t.append(b);
+    bindName(n, async v => {
+      let nv = clean(v); if (!nv) return false;
+      const e = '.' + ext(q.name); if (!nv.toLowerCase().endsWith(e)) nv += e;
+      if (nv !== q.name && taken(q.dir, nv)){ toast('exists'); return false; }
+      q.name = nv; n.value = nv; return true;
+    });
+    m.append(c);
+  });
+
+  const go = $('#go');
+  go.hidden = !pend.length;
+  if (!busy) go.innerHTML = I.up + '<span>' + pend.length + '</span>';
+}
+
+/* ───────── действия ───────── */
+async function copy(text, btn){
+  try{ await navigator.clipboard.writeText(text); }
+  catch{ const a=document.createElement('textarea'); a.value=text; document.body.append(a); a.select(); document.execCommand('copy'); a.remove(); }
+  btn.innerHTML = I.ok; btn.style.opacity = 1;
+  setTimeout(() => { btn.innerHTML = I.cp; btn.style.opacity = ''; }, 1000);
+}
+
+async function rename(P, Q){
+  if (tree.some(x => x.path===Q || x.path.startsWith(Q+'/'))){ toast('exists'); return false; }
+  if (!need()) return false;
+  try{
+    const rel = tree.filter(x => x.type==='blob' && (x.path===P || x.path.startsWith(P+'/')));
+    const e = [];
+    for (const x of rel){
+      e.push({path:Q + x.path.slice(P.length), mode:x.mode, type:'blob', sha:x.sha});
+      e.push({path:x.path, mode:x.mode, type:'blob', sha:null});
+    }
+    await commit(e, 'rename');
+    await load();
+    return true;
+  }catch(err){ toast(err.message); return false; }
+}
+
+function newFolder(){
+  if ($('#nf')) return;
+  const {c,t,n} = cell(I.dir, '');
+  n.id = 'nf'; n.readOnly = false; t.style.borderStyle = 'dashed';
+  $('#main').prepend(c); n.focus();
+  let done = false;
+  n.onkeydown = e => { if (e.key==='Enter') n.blur(); if (e.key==='Escape'){ n.value=''; n.blur(); } };
+  n.onblur = async () => {
+    if (done) return; done = true;
+    const v = clean(n.value);
+    if (!v){ c.remove(); return; }
+    const P = (cur ? cur + '/' : '') + v;
+    if (taken(cur, v)){ toast('exists'); c.remove(); return; }
+    if (!need()){ c.remove(); return; }
+    try{
+      const b = await blob('\n', 'utf-8');
+      await commit([{path:P + '/.gitkeep', mode:'100644', type:'blob', sha:b.sha}], 'folder');
+      await load();
+    }catch(e){ toast(e.message); c.remove(); }
+  };
+}
+
+function add(list){
+  let n = 0;
+  for (const f of list){
+    const e = EX.includes(ext(f.name)) ? ext(f.name) : MIME[f.type];
+    if (!e) continue;
+    let name; do { name = Array.from({length:7}, () => String.fromCharCode(97 + Math.random()*26 | 0)).join('') + '.' + e; } while (taken(cur, name));
+    pend.push({file:f, name, dir:cur, url:URL.createObjectURL(f)});
+    n++;
+  }
+  if (n) render();
+}
+
+async function send(){
+  if (busy || !pend.length || !need()) return;
+  busy = true;
+  const go = $('#go'); go.disabled = true;
+  try{
+    const ents = []; let i = 0;
+    for (const q of pend){
+      go.textContent = ++i + '/' + pend.length;
+      const b = await blob(await b64(q.file), 'base64');
+      ents.push({path:(q.dir ? q.dir + '/' : '') + q.name, mode:'100644', type:'blob', sha:b.sha});
+    }
+    go.textContent = '…';
+    await commit(ents, 'upload');
+    pend.forEach(q => URL.revokeObjectURL(q.url)); pend = [];
+    busy = false; go.disabled = false;
+    await load();
+  }catch(e){ toast(e.message); }
+  busy = false; go.disabled = false; render();
+}
+
+/* ───────── предпросмотр ───────── */
+function show(i){
+  pi = i; const x = pl[i];
+  const im = $('#pi'), au = $('#au'), pa = $('#pa');
+  $('#pv').hidden = false;
+  au.pause();
+  if (x.audio){ im.hidden = true; im.removeAttribute('src'); pa.hidden = false; au.src = x.url; au.play().catch(()=>{}); $('#pn').textContent = x.name; }
+  else        { pa.hidden = true; au.removeAttribute('src'); im.hidden = false; im.src = x.url; }
+}
+function hide(){
+  $('#pv').hidden = true; pi = -1;
+  const au = $('#au'); au.pause(); au.removeAttribute('src'); $('#pi').removeAttribute('src');
+}
+$('#pv').onclick = hide;
+$('#au').onclick = e => e.stopPropagation();
+document.addEventListener('keydown', e => {
+  if (pi < 0) return;
+  if (e.key === 'Escape') hide();
+  if (e.key === 'ArrowRight') show((pi + 1) % pl.length);
+  if (e.key === 'ArrowLeft')  show((pi - 1 + pl.length) % pl.length);
+});
+
+/* ───────── события ───────── */
+$('#addb').onclick = () => $('#fi').click();
+$('#fi').onchange  = e => { add(e.target.files); e.target.value = ''; };
+$('#fob').onclick  = newFolder;
+$('#go').onclick   = send;
+
+addEventListener('dragover',  e => { e.preventDefault(); document.body.classList.add('d'); });
+addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('d'); });
+addEventListener('drop',      e => { e.preventDefault(); document.body.classList.remove('d'); add(e.dataTransfer.files); });
+addEventListener('paste',     e => { if (e.clipboardData.files.length) add(e.clipboardData.files); });
+
+const readHash = () => location.hash.slice(1).split('/').filter(Boolean).map(decodeURIComponent).join('/');
+addEventListener('hashchange', () => { cur = readHash(); render(); });
+cur = readHash();
+render();
+load();
+</script>
+</body>
+</html>
