@@ -33,6 +33,8 @@ header{position:sticky;top:0;z-index:5;background:#000;border-bottom:1px solid #
 .btn:hover,.btn:focus-visible{background:#fff;color:#000;outline:0}
 .btn.sq{width:34px;padding:0;justify-content:center}
 
+#hint{padding:10px 16px 0;opacity:.75}
+
 /* ── сетка ── */
 main{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:20px 16px;padding:16px 16px 96px}
 body.d main{outline:1px dashed #fff;outline-offset:-8px}
@@ -43,6 +45,8 @@ body.d main{outline:1px dashed #fff;outline-offset:-8px}
 .tile .big{width:46px;height:46px;stroke-width:1.5}
 .pend .tile{border-style:dashed}
 .pend .tag{position:absolute;left:0;bottom:0;right:0;background:#fff;color:#000;padding:3px 6px;font-size:12px;font-weight:700}
+.upcell .tile{border-style:dashed}
+.upl{display:block;margin-top:7px;padding:2px 0;border-bottom:1px solid transparent}
 
 .name{display:block;width:100%;margin-top:7px;padding:2px 0;background:none;border:0;border-bottom:1px dotted #fff;
   color:#fff;outline:0;text-overflow:ellipsis;cursor:text}
@@ -53,7 +57,7 @@ body.d main{outline:1px dashed #fff;outline-offset:-8px}
   background:#fff;color:#000;border:0;cursor:pointer}
 .cp:hover,.rm:hover,.cp:focus-visible,.rm:focus-visible{background:#000;color:#fff;outline:1px solid #fff;outline-offset:-1px}
 
-.empty{grid-column:1/-1;min-height:220px;border:1px dashed #fff;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;font-size:15px}
+.empty{grid-column:1/-1;min-height:220px;border:1px dashed #fff;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;font-size:15px;text-align:center;padding:16px}
 .empty:hover{background:#fff;color:#000}
 
 #go{position:fixed;right:16px;bottom:16px;height:48px;padding:0 18px;display:flex;align-items:center;gap:9px;
@@ -90,6 +94,7 @@ body.d main{outline:1px dashed #fff;outline-offset:-8px}
       <button class="btn sq" id="out" aria-label="Выйти" title="Выйти"></button>
     </div>
   </header>
+  <p id="hint"></p>
   <main id="main"></main>
   <button id="go" hidden></button>
 </div>
@@ -117,12 +122,16 @@ const SITE = `https://${C.owner}.github.io/${C.repo}/`;
 const enc  = p => p.split('/').map(encodeURIComponent).join('/');
 const ext  = n => (n.includes('.') ? n.split('.').pop() : '').toLowerCase();
 const isOk = n => EX.includes(ext(n));
-const clean = s => s.trim().replace(/[\s\\/]+/g,'-').replace(/[^\p{L}\p{N}._-]/gu,'').replace(/^[.-]+/,'');
+
+/* только латиница, цифры, точка, дефис, подчёркивание */
+const latin = s => s.replace(/[\s\\/]+/g,'-').replace(/[^A-Za-z0-9._-]/g,'');
+const clean = s => latin(s.trim()).replace(/^[.-]+/,'');
 
 const I = {
   plus:  '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   fplus: '<svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/><path d="M12 11v6M9 14h6"/></svg>',
   dir:   '<svg class="big" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></svg>',
+  back:  '<svg class="big" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>',
   play:  '<svg class="big" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
   cp:    '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11"/><path d="M5 15V4h11"/></svg>',
   ok:    '<svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>',
@@ -131,7 +140,7 @@ const I = {
   out:   '<svg viewBox="0 0 24 24"><path d="M10 4H4v16h6M9 12h11M16 8l4 4-4 4"/></svg>'
 };
 $('#addb').innerHTML = I.plus  + '<span>Файлы</span>';
-$('#fob').innerHTML  = I.fplus + '<span>Папка</span>';
+$('#fob').innerHTML  = I.fplus + '<span>Новая папка</span>';
 $('#out').innerHTML  = I.out;
 
 let tree = [], pend = [], cur = '', busy = false, pl = [], pi = -1;
@@ -203,7 +212,17 @@ function cell(tileHTML, name, icon){
   const c = document.createElement('div'); c.className = 'cell';
   const t = document.createElement('div'); t.className = 'tile' + (icon ? ' ico' : ''); t.innerHTML = tileHTML;
   const n = document.createElement('input'); n.className = 'name'; n.value = name; n.readOnly = true; n.spellcheck = false; n.autocomplete = 'off';
+  n.setAttribute('autocapitalize','off'); n.setAttribute('autocorrect','off'); n.setAttribute('inputmode','url');
   n.title = 'Переименовать';
+  /* кириллица и прочие символы вырезаются прямо при вводе */
+  n.addEventListener('input', () => {
+    const v = latin(n.value);
+    if (v !== n.value){
+      const pos = Math.max(0, (n.selectionStart || 0) - (n.value.length - v.length));
+      n.value = v; n.setSelectionRange(pos, pos);
+      toast('Только латиница: a-z, 0-9, - _ .');
+    }
+  });
   c.append(t, n);
   return {c, t, n};
 }
@@ -227,6 +246,13 @@ const taken = (d, n) => { const P=(d?d+'/':'')+n; return tree.some(x=>x.path===P
 function render(){
   if ($('#app').hidden) return;
   const prefix = cur ? cur + '/' : '';
+  const root = !cur;
+
+  /* кнопка «Файлы» и подсказка зависят от того, где мы */
+  $('#addb').hidden = root;
+  $('#hint').textContent = root
+    ? 'Корень: здесь только папки. Создайте папку или откройте существующую, чтобы загрузить файлы.'
+    : 'Папка /' + cur + ' — перетащите файлы сюда или нажмите «Файлы». Имена только латиницей.';
 
   const p = $('#path'); p.innerHTML = '';
   const mk = (t,h) => { const a=document.createElement('a'); a.textContent=t; a.onclick=()=>{ location.hash = h; }; return a; };
@@ -242,16 +268,27 @@ function render(){
     if (x.type!=='blob' || !x.path.startsWith(prefix)) continue;
     const r = x.path.slice(prefix.length), i = r.indexOf('/');
     if (i > 0){ const d = r.slice(0,i); if (d[0] !== '.') dirs.add(d); }
-    else if (isOk(r)) files.push(r);
+    else if (!root && isOk(r)) files.push(r);   /* в корне файлы не показываем */
   }
 
   const m = $('#main'); m.innerHTML = ''; pl = [];
+
+  /* плитка «назад» */
+  if (!root){
+    const up = seg.slice(0,-1).join('/');
+    const c = document.createElement('div'); c.className = 'cell upcell';
+    const t = document.createElement('div'); t.className = 'tile ico'; t.innerHTML = I.back;
+    t.onclick = () => { location.hash = up ? '#' + enc(up) : ''; };
+    const l = document.createElement('span'); l.className = 'upl'; l.textContent = '.. назад';
+    c.append(t, l); m.append(c);
+  }
 
   [...dirs].sort().forEach(d => {
     const {c,t,n} = cell(I.dir, d, true);
     t.onclick = () => { location.hash = '#' + enc(prefix + d); };
     bindName(n, async v => {
-      const nv = clean(v); if (!nv || nv === d) return false;
+      const nv = clean(v); if (!nv || nv === d) { n.value = d; return false; }
+      n.value = nv;
       return rename(prefix + d, prefix + nv);
     });
     m.append(c);
@@ -292,10 +329,16 @@ function render(){
     m.append(c);
   });
 
-  if (!m.children.length){
+  /* пустое состояние */
+  if (!dirs.size && !files.length && !pend.some(q => q.dir === cur)){
     const e = document.createElement('div'); e.className = 'empty';
-    e.innerHTML = I.plus + '<span>Файлы</span>';
-    e.onclick = () => $('#fi').click();
+    if (root){
+      e.innerHTML = I.fplus + '<span>Создать первую папку</span>';
+      e.onclick = newFolder;
+    } else {
+      e.innerHTML = I.plus + '<span>Загрузить файлы</span>';
+      e.onclick = () => $('#fi').click();
+    }
     m.append(e);
   }
 
@@ -328,11 +371,14 @@ async function rename(P, Q){
 }
 
 function newFolder(){
-  if ($('#nf')) return;
+  if ($('#nf')) { $('#nf').focus(); return; }
   const {c,t,n} = cell(I.dir, '', true);
-  n.id = 'nf'; n.readOnly = false; n.placeholder = 'Имя папки'; t.style.borderStyle = 'dashed';
+  n.id = 'nf'; n.readOnly = false; n.placeholder = 'folder-name'; t.style.borderStyle = 'dashed';
   $('#main').querySelector('.empty')?.remove();
-  $('#main').prepend(c); n.focus();
+  /* новая папка встаёт после плитки «назад», если она есть */
+  const up = $('#main').querySelector('.upcell');
+  if (up) up.after(c); else $('#main').prepend(c);
+  n.focus();
   let done = false;
   n.onkeydown = e => { if (e.key==='Enter') n.blur(); if (e.key==='Escape'){ n.value=''; n.blur(); } };
   n.onblur = async () => {
@@ -345,11 +391,13 @@ function newFolder(){
       const b = await blob('\n', 'utf-8');
       await commit([{path:P + '/.gitkeep', mode:'100644', type:'blob', sha:b.sha}], 'folder');
       await load();
+      location.hash = '#' + enc(P);   /* сразу заходим в созданную папку */
     }catch(e){ toast(e.message); c.remove(); render(); }
   };
 }
 
 function add(list){
+  if (!cur){ toast('Сначала откройте папку — в корень файлы нельзя'); return; }
   let n = 0;
   for (const f of list){
     const e = EX.includes(ext(f.name)) ? ext(f.name) : MIME[f.type];
@@ -363,6 +411,7 @@ function add(list){
 
 async function send(){
   if (busy || !pend.length) return;
+  if (pend.some(q => !q.dir)){ toast('Файлы в корень загружать нельзя'); return; }
   busy = true;
   const go = $('#go'); go.disabled = true;
   try{
@@ -370,7 +419,7 @@ async function send(){
     for (const q of pend){
       go.textContent = ++i + ' / ' + pend.length;
       const b = await blob(await b64(q.file), 'base64');
-      ents.push({path:(q.dir ? q.dir + '/' : '') + q.name, mode:'100644', type:'blob', sha:b.sha});
+      ents.push({path:q.dir + '/' + q.name, mode:'100644', type:'blob', sha:b.sha});
     }
     go.textContent = '…';
     await commit(ents, 'upload');
@@ -405,12 +454,12 @@ document.addEventListener('keydown', e => {
 });
 
 /* ───────── события ───────── */
-$('#addb').onclick = () => $('#fi').click();
+$('#addb').onclick = () => { if (!cur) return toast('Сначала откройте папку'); $('#fi').click(); };
 $('#fi').onchange  = e => { add(e.target.files); e.target.value = ''; };
 $('#fob').onclick  = newFolder;
 $('#go').onclick   = send;
 
-addEventListener('dragover',  e => { e.preventDefault(); if (!$('#app').hidden) document.body.classList.add('d'); });
+addEventListener('dragover',  e => { e.preventDefault(); if (!$('#app').hidden && cur) document.body.classList.add('d'); });
 addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('d'); });
 addEventListener('drop',      e => { e.preventDefault(); document.body.classList.remove('d'); if (!$('#app').hidden) add(e.dataTransfer.files); });
 addEventListener('paste',     e => { if (!$('#app').hidden && e.clipboardData.files.length) add(e.clipboardData.files); });
