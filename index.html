@@ -164,7 +164,7 @@ function gate(msg){
   $('#gi').value = ''; $('#gi').focus();
 }
 async function check(t){
-  const r = await fetch(API, {headers:{Accept:'application/vnd.github+json', Authorization:'Bearer ' + t}});
+  const r = await fetch(API, {cache:'no-store', headers:{Accept:'application/vnd.github+json', Authorization:'Bearer ' + t}});
   if (r.status === 401) throw new Error('Неверный токен');
   if (r.status === 404) throw new Error('Нет доступа к ' + C.owner + '/' + C.repo);
   if (!r.ok) throw new Error('Ошибка ' + r.status);
@@ -186,10 +186,11 @@ $('#gf').onsubmit = async e => {
 $('#out').onclick = () => { localStorage.removeItem('t'); location.hash = ''; location.reload(); };
 
 /* ───────── github api ───────── */
+/* cache:'no-store' — иначе браузер отдаёт старый список/ветку до 60 секунд */
 async function gh(p, o={}){
-  const h = {Accept:'application/vnd.github+json', Authorization:'Bearer ' + tok()};
+  const h = {Accept:'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28', Authorization:'Bearer ' + tok()};
   if (o.body) h['Content-Type'] = 'application/json';
-  const r = await fetch(API + p, {...o, headers:h});
+  const r = await fetch(API + p, {...o, headers:h, cache:'no-store'});
   if (!r.ok){
     if (r.status === 401){ localStorage.removeItem('t'); gate('Токен недействителен'); }
     let m=''; try{ m=(await r.json()).message; }catch{}
@@ -197,25 +198,28 @@ async function gh(p, o={}){
   }
   return r.json();
 }
-/* ветка могла сдвинуться (прошлый коммит ещё не виден или собралась Pages) — повторяем с новым HEAD */
-async function commit(entries, msg){
+
+/* как в HOST: один файл = один запрос через contents API */
+const cpath = p => '/contents/' + enc(p);
+const put = (path, content, msg, sha) => {
+  const body = {message:msg, content, branch:C.branch};
+  if (sha) body.sha = sha;
+  return gh(cpath(path), {method:'PUT', body:JSON.stringify(body)});
+};
+const del = (path, sha, msg) =>
+  gh(cpath(path), {method:'DELETE', body:JSON.stringify({message:msg, sha, branch:C.branch})});
+const shaOf = p => (tree.find(x => x.type==='blob' && x.path===p) || {}).sha;
+
+/* 409 = ветка только что сдвинулась от предыдущего коммита — коротко ждём и повторяем */
+async function retry(fn){
   for (let a = 1; ; a++){
-    try{ return await commitOnce(entries, msg); }
+    try{ return await fn(); }
     catch(e){
-      if (a >= 6 || !/fast forward|422|409/i.test(e.message)) throw e;
+      if (a >= 4 || !/^409/.test(e.message)) throw e;
       await new Promise(r => setTimeout(r, 500 * a));
     }
   }
 }
-async function commitOnce(entries, msg){
-  const ref = await gh(`/git/ref/heads/${C.branch}`);
-  const cs  = ref.object.sha;
-  const c   = await gh(`/git/commits/${cs}`);
-  const t   = await gh('/git/trees', {method:'POST', body:JSON.stringify({base_tree:c.tree.sha, tree:entries})});
-  const nc  = await gh('/git/commits', {method:'POST', body:JSON.stringify({message:msg, tree:t.sha, parents:[cs]})});
-  await gh(`/git/refs/heads/${C.branch}`, {method:'PATCH', body:JSON.stringify({sha:nc.sha})});
-}
-const blob = (content, encoding) => gh('/git/blobs', {method:'POST', body:JSON.stringify({content, encoding})});
 const b64 = f => new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(f); });
 
 async function load(){
@@ -374,20 +378,24 @@ function remove(P){
   render();
 }
 
+/* переименование: создаём файл под новым именем и удаляем старый (для папки — так по каждому файлу) */
 async function rename(P, Q){
   if (tree.some(x => x.path===Q || x.path.startsWith(Q+'/'))){ toast('Имя занято'); return false; }
   try{
     const rel = tree.filter(x => x.type==='blob' && (x.path===P || x.path.startsWith(P+'/')));
-    const e = [];
+    let i = 0;
     for (const x of rel){
-      e.push({path:Q + x.path.slice(P.length), mode:x.mode, type:'blob', sha:x.sha});
-      e.push({path:x.path, mode:x.mode, type:'blob', sha:null});
+      if (rel.length > 1) toast('Переименование ' + (++i) + ' / ' + rel.length);
+      const b = await gh('/git/blobs/' + x.sha);
+      const content = b.content.replace(/\n/g, '');
+      const np = Q + x.path.slice(P.length);
+      await retry(() => put(np, content, 'rename ' + x.path + ' -> ' + np));
+      await retry(() => del(x.path, x.sha, 'rename: remove ' + x.path));
     }
-    await commit(e, 'rename');
     dels = new Set();
     await load();
     return true;
-  }catch(err){ toast(err.message); return false; }
+  }catch(err){ toast(err.message); await load(); return false; }
 }
 
 function newFolder(){
@@ -407,8 +415,7 @@ function newFolder(){
     const P = (cur ? cur + '/' : '') + v;
     if (taken(cur, v)){ toast('Имя занято'); c.remove(); render(); return; }
     try{
-      const b = await blob('\n', 'utf-8');
-      await commit([{path:P + '/.gitkeep', mode:'100644', type:'blob', sha:b.sha}], 'folder');
+      await retry(() => put(P + '/.gitkeep', 'Cg==', 'folder ' + P));   /* 'Cg==' = "\n" */
       await load();
       location.hash = '#' + enc(P);   /* сразу заходим в созданную папку */
     }catch(e){ toast(e.message); c.remove(); render(); }
@@ -432,28 +439,41 @@ function add(list){
   if (n) render(); else if (list.length) toast('Только png, jpg, gif, mp3');
 }
 
+/* сохранение: файлы по одному (как в HOST), затем удаления; то, что не вышло, остаётся в очереди */
 async function send(){
   if (busy || !(pend.length || dels.size)) return;
   if (pend.some(q => !q.dir)){ toast('Файлы в корень загружать нельзя'); return; }
   busy = true;
   const go = $('#go'); go.disabled = true;
-  try{
-    const ents = []; let i = 0;
-    for (const q of pend){
-      go.textContent = ++i + ' / ' + pend.length;
-      const b = await blob(await b64(q.file), 'base64');
-      ents.push({path:q.dir + '/' + q.name, mode:'100644', type:'blob', sha:b.sha});
-    }
-    go.textContent = '…';
-    const up = new Set(ents.map(x => x.path));
-    for (const p of dels) if (!up.has(p)) ents.push({path:p, mode:'100644', type:'blob', sha:null});
-    await commit(ents, 'update');
-    pend.forEach(q => URL.revokeObjectURL(q.url)); pend = []; dels = new Set();
-    busy = false; go.disabled = false;
-    toast('Сохранено');
-    await load();
-  }catch(e){ toast(e.message); }
-  busy = false; go.disabled = false; render();
+  const total = pend.length + dels.size;
+  const up = new Set(pend.map(q => q.dir + '/' + q.name));
+  let n = 0, fail = 0, lastErr = '';
+
+  for (const q of [...pend]){
+    go.textContent = ++n + ' / ' + total;
+    const path = q.dir + '/' + q.name;
+    try{
+      const content = await b64(q.file);
+      await retry(() => put(path, content, 'add ' + path, shaOf(path)));
+      URL.revokeObjectURL(q.url);
+      pend = pend.filter(z => z !== q);
+    }catch(e){ fail++; lastErr = q.name + ': ' + e.message; }
+  }
+
+  for (const p of [...dels]){
+    if (up.has(p)){ dels.delete(p); continue; }   /* файл заменяется — удалять не нужно */
+    go.textContent = ++n + ' / ' + total;
+    const sha = shaOf(p);
+    if (!sha){ dels.delete(p); continue; }
+    try{
+      await retry(() => del(p, sha, 'delete ' + p));
+      dels.delete(p);
+    }catch(e){ fail++; lastErr = p + ': ' + e.message; }
+  }
+
+  busy = false; go.disabled = false;
+  await load();
+  toast(fail ? 'Не вышло: ' + fail + ' (' + lastErr + ')' : 'Сохранено');
 }
 
 /* ───────── предпросмотр ───────── */
