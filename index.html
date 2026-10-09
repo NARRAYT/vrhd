@@ -91,6 +91,7 @@ body.d main{outline:1px dashed #fff;outline-offset:-8px}
     <div class="r">
       <button class="btn" id="addb"></button>
       <button class="btn" id="fob"></button>
+      <button class="btn sq" id="refb" aria-label="Обновить список" title="Обновить список"></button>
       <button class="btn sq" id="out" aria-label="Выйти" title="Выйти"></button>
     </div>
   </header>
@@ -142,6 +143,8 @@ const I = {
 $('#addb').innerHTML = I.plus  + '<span>Файлы</span>';
 $('#fob').innerHTML  = I.fplus + '<span>Новая папка</span>';
 $('#out').innerHTML  = I.out;
+$('#refb').innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/></svg>';
+$('#refb').onclick = async () => { await load(); toast('Список обновлён'); };
 
 let tree = [], pend = [], cur = '', busy = false, pl = [], pi = -1;
 
@@ -388,7 +391,11 @@ function add(list){
   for (const f of list){
     const e = EX.includes(ext(f.name)) ? ext(f.name) : MIME[f.type];
     if (!e) continue;
-    let name; do { name = Array.from({length:7}, () => String.fromCharCode(97 + Math.random()*26 | 0)).join('') + '.' + e; } while (taken(cur, name));
+    /* оригинальное имя; кириллица и прочее вырезаются, при пустом результате — случайное */
+    let base = clean(f.name.replace(/\.[^.]*$/, ''));
+    if (!base) base = Array.from({length:7}, () => String.fromCharCode(97 + Math.random()*26 | 0)).join('');
+    let name = base + '.' + e, k = 1;
+    while (taken(cur, name)) name = base + '-' + (++k) + '.' + e;
     pend.push({file:f, name, dir:cur, url:URL.createObjectURL(f)});
     n++;
   }
